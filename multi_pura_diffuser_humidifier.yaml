@@ -13,17 +13,17 @@ blueprint:
           integration: pura
     names:
       name: Custom Names
-      description: Names to assign for each diffuser instance (in the same order as entities).
+      description: List of custom names (one per diffuser, same order).
+      default: []
       selector:
-        text:
-          multiline: true
+        object:
 
 mode: parallel
 max: 10
 
 variables:
   diffuser_entities: !input diffusers
-  custom_names: !input names | from_yaml
+  custom_names: !input names
 
 trigger:
   - platform: state
