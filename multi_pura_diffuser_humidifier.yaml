@@ -1,12 +1,19 @@
 blueprint:
   name: Pura Diffusers as HomeKit Humidifiers
   description: >
-    Expose multiple Pura diffuser entities as independent humidifiers in HomeKit using virtual humidity sensors and intensity mapping.
+    Expose multiple Pura diffuser entities as independent humidifiers in HomeKit using intensity mapping and fragrance slot control.
   domain: automation
   input:
-    diffusers:
-      name: Diffusers
-      description: List of Pura diffuser entities to convert.
+    fragrance_entities:
+      name: Fragrance Selector Entities
+      description: List of fragrance slot entities (controls on/off via slot selection).
+      selector:
+        entity:
+          multiple: true
+          integration: pura
+    intensity_entities:
+      name: Intensity Selector Entities
+      description: List of intensity entities (controls scent strength).
       selector:
         entity:
           multiple: true
@@ -22,90 +29,113 @@ mode: parallel
 max: 10
 
 variables:
-  diffuser_entities: !input diffusers
+  fragrance_entities: !input fragrance_entities
+  intensity_entities: !input intensity_entities
   custom_names: !input names
 
 trigger:
   - platform: state
     for:
       seconds: 1
-    entity_id: !input diffusers
+    entity_id: !input intensity_entities
 
 condition: []
 
 action:
   - repeat:
-      count: "{{ diffuser_entities | length }}"
+      count: "{{ intensity_entities | length }}"
       sequence:
         - variables:
-            diffuser: "{{ diffuser_entities[repeat.index - 1] }}"
+            fragrance: "{{ fragrance_entities[repeat.index - 1] }}"
+            intensity: "{{ intensity_entities[repeat.index - 1] }}"
             name: "{{ custom_names[repeat.index - 1] | slugify }}"
+            humidifier: "humidifier.{{ custom_names[repeat.index - 1] | slugify }}_humidifier"
 
-        - service: template.reload
-
+        # Map intensity to humidity sensor value
         - service: python_script.set_state
           data:
             entity_id: "sensor.{{ name }}_humidity"
             state: >
-              {% set state = states(diffuser) %}
-              {% if state == 'off' %} 0
-              {% elif state == 'subtle' %} 33
-              {% elif state == 'medium' %} 66
-              {% elif state == 'strong' %} 100
+              {% set s = states(intensity) %}
+              {% if s == 'subtle' %} 33
+              {% elif s == 'medium' %} 66
+              {% elif s == 'strong' %} 100
               {% else %} 0 {% endif %}
             attributes:
               unit_of_measurement: "%"
               device_class: humidity
 
-        - service: humidifier.set_humidity
-          data:
-            entity_id: "humidifier.{{ name }}_humidifier"
-            humidity: "{{ state_attr(diffuser, 'intensity') | default(0) }}"
-
+        # Map humidity back to diffuser state
         - choose:
             - conditions:
-                - condition: numeric_state
-                  entity_id: "humidifier.{{ name }}_humidifier"
-                  attribute: humidity
-                  below: 1
+                - condition: or
+                  conditions:
+                    - condition: numeric_state
+                      entity_id: "{{ humidifier }}"
+                      attribute: humidity
+                      below: 1
+                    - condition: state
+                      entity_id: "{{ humidifier }}"
+                      state: "off"
               sequence:
-                - service: pura.set_intensity
-                  data:
-                    intensity: off
+                - service: select.select_option
                   target:
-                    entity_id: "{{ diffuser }}"
+                    entity_id: "{{ fragrance }}"
+                  data:
+                    option: "off"
+                - service: select.select_option
+                  target:
+                    entity_id: "{{ intensity }}"
+                  data:
+                    option: "off"
+
             - conditions:
                 - condition: numeric_state
-                  entity_id: "humidifier.{{ name }}_humidifier"
+                  entity_id: "{{ humidifier }}"
                   attribute: humidity
                   below: 34
               sequence:
-                - service: pura.set_intensity
-                  data:
-                    intensity: subtle
+                - service: select.select_option
                   target:
-                    entity_id: "{{ diffuser }}"
+                    entity_id: "{{ fragrance }}"
+                  data:
+                    option: "slot 1"
+                - service: select.select_option
+                  target:
+                    entity_id: "{{ intensity }}"
+                  data:
+                    option: "subtle"
+
             - conditions:
                 - condition: numeric_state
-                  entity_id: "humidifier.{{ name }}_humidifier"
+                  entity_id: "{{ humidifier }}"
                   attribute: humidity
                   below: 67
               sequence:
-                - service: pura.set_intensity
-                  data:
-                    intensity: medium
+                - service: select.select_option
                   target:
-                    entity_id: "{{ diffuser }}"
+                    entity_id: "{{ fragrance }}"
+                  data:
+                    option: "slot 1"
+                - service: select.select_option
+                  target:
+                    entity_id: "{{ intensity }}"
+                  data:
+                    option: "medium"
+
             - conditions:
                 - condition: numeric_state
-                  entity_id: "humidifier.{{ name }}_humidifier"
+                  entity_id: "{{ humidifier }}"
                   attribute: humidity
                   above: 66
               sequence:
-                - service: pura.set_intensity
-                  data:
-                    intensity: strong
+                - service: select.select_option
                   target:
-                    entity_id: "{{ diffuser }}"
-
-        - service: homeassistant.reload_config
+                    entity_id: "{{ fragrance }}"
+                  data:
+                    option: "slot 1"
+                - service: select.select_option
+                  target:
+                    entity_id: "{{ intensity }}"
+                  data:
+                    option: "strong"
