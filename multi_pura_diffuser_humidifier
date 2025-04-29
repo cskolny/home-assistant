@@ -1,0 +1,111 @@
+blueprint:
+  name: Pura Diffusers as HomeKit Humidifiers
+  description: >
+    Expose multiple Pura diffuser entities as independent humidifiers in HomeKit using virtual humidity sensors and intensity mapping.
+  domain: automation
+  input:
+    diffusers:
+      name: Diffusers
+      description: List of Pura diffuser entities to convert.
+      selector:
+        entity:
+          multiple: true
+          integration: pura
+    names:
+      name: Custom Names
+      description: Names to assign for each diffuser instance (in the same order as entities).
+      selector:
+        text:
+          multiline: true
+
+mode: parallel
+max: 10
+
+variables:
+  diffuser_entities: !input diffusers
+  custom_names: !input names | from_yaml
+
+trigger:
+  - platform: state
+    for:
+      seconds: 1
+    entity_id: !input diffusers
+
+condition: []
+
+action:
+  - repeat:
+      count: "{{ diffuser_entities | length }}"
+      sequence:
+        - variables:
+            diffuser: "{{ diffuser_entities[repeat.index - 1] }}"
+            name: "{{ custom_names[repeat.index - 1] | slugify }}"
+
+        - service: template.reload
+
+        - service: python_script.set_state
+          data:
+            entity_id: "sensor.{{ name }}_humidity"
+            state: >
+              {% set state = states(diffuser) %}
+              {% if state == 'off' %} 0
+              {% elif state == 'subtle' %} 33
+              {% elif state == 'medium' %} 66
+              {% elif state == 'strong' %} 100
+              {% else %} 0 {% endif %}
+            attributes:
+              unit_of_measurement: "%"
+              device_class: humidity
+
+        - service: humidifier.set_humidity
+          data:
+            entity_id: "humidifier.{{ name }}_humidifier"
+            humidity: "{{ state_attr(diffuser, 'intensity') | default(0) }}"
+
+        - choose:
+            - conditions:
+                - condition: numeric_state
+                  entity_id: "humidifier.{{ name }}_humidifier"
+                  attribute: humidity
+                  below: 1
+              sequence:
+                - service: pura.set_intensity
+                  data:
+                    intensity: off
+                  target:
+                    entity_id: "{{ diffuser }}"
+            - conditions:
+                - condition: numeric_state
+                  entity_id: "humidifier.{{ name }}_humidifier"
+                  attribute: humidity
+                  below: 34
+              sequence:
+                - service: pura.set_intensity
+                  data:
+                    intensity: subtle
+                  target:
+                    entity_id: "{{ diffuser }}"
+            - conditions:
+                - condition: numeric_state
+                  entity_id: "humidifier.{{ name }}_humidifier"
+                  attribute: humidity
+                  below: 67
+              sequence:
+                - service: pura.set_intensity
+                  data:
+                    intensity: medium
+                  target:
+                    entity_id: "{{ diffuser }}"
+            - conditions:
+                - condition: numeric_state
+                  entity_id: "humidifier.{{ name }}_humidifier"
+                  attribute: humidity
+                  above: 66
+              sequence:
+                - service: pura.set_intensity
+                  data:
+                    intensity: strong
+                  target:
+                    entity_id: "{{ diffuser }}"
+
+        - service: homeassistant.reload_config
